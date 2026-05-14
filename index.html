@@ -10,6 +10,12 @@
     </style>
   </head>
   <body>
+    <script>
+      (function() {
+        var p = new URLSearchParams(window.location.search).get('p')
+        if (p) window.history.replaceState(null, null, '/whiteboard' + p)
+      })()
+    </script>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
   </body>

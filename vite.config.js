@@ -5,7 +5,7 @@ const isProduction = process.env.NODE_ENV === 'production'
 
 export default defineConfig({
   plugins: [react()],
-  base: isProduction ? '/kosa-vibecoding-2026-1st/' : '/',
+  base: isProduction ? '/whiteboard/' : '/',
   server: {
     port: 5173,
     proxy: {
