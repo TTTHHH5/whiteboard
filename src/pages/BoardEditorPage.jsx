@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { api } from '../services/api'
+import { supabase } from '../services/supabase'
 import Canvas from '../components/Canvas/Canvas'
 import Toolbar from '../components/Toolbar/Toolbar'
 import { useEditHistory } from '../hooks/useEditHistory'
@@ -10,12 +10,10 @@ import { useToast } from '../components/Toast'
 const DEFAULT_STYLE = { color: '#000000', strokeWidth: 2, fillColor: 'transparent' }
 
 function handleApiError(err, navigate, toast) {
-  if (err.status === 401) {
+  if (err.code === 'PGRST301' || err.message?.includes('JWT')) {
     navigate('/login', { replace: true })
-  } else if (err.status === 403) {
+  } else if (err.code === '42501') {
     toast('이 보드에 대한 권한이 없습니다.', 'error')
-  } else if (!navigator.onLine || err.message === 'Failed to fetch') {
-    toast('네트워크 오류가 발생했습니다. 연결을 확인하고 다시 시도하세요.', 'error')
   } else {
     toast(err.message || '오류가 발생했습니다.', 'error')
   }
@@ -37,20 +35,17 @@ export default function BoardEditorPage() {
   useEffect(() => {
     async function load() {
       try {
-        const [boardData, elementsData] = await Promise.all([
-          api.get(`/api/boards/${boardId}`),
-          api.get(`/api/boards/${boardId}/elements`),
+        const [boardRes, elementsRes] = await Promise.all([
+          supabase.from('boards').select('*').eq('id', boardId).single(),
+          supabase.from('drawing_elements').select('*').eq('board_id', boardId).order('z_index').order('created_at'),
         ])
-        setBoard(boardData)
-        setElements(elementsData.elements)
+        if (boardRes.error) throw boardRes.error
+        if (elementsRes.error) throw elementsRes.error
+        const { data: { user } } = await supabase.auth.getUser()
+        setBoard({ ...boardRes.data, is_owner: boardRes.data.owner_id === user?.id })
+        setElements(elementsRes.data)
       } catch (err) {
-        if (err.status === 401) {
-          navigate('/login', { replace: true })
-        } else if (err.status === 404) {
-          setError('보드를 찾을 수 없습니다.')
-        } else {
-          setError(err.message)
-        }
+        setError(err.message)
       }
     }
     load()
@@ -80,58 +75,68 @@ export default function BoardEditorPage() {
 
   const handleElementComplete = useCallback(async (elementData) => {
     try {
-      const saved = await api.post(`/api/boards/${boardId}/elements`, elementData)
-      setElements(prev => [...prev, saved])
-      history.push({ type: 'add', element: saved })
-      await broadcast('element:add', { element: saved })
+      const { data: { user } } = await supabase.auth.getUser()
+      const { data, error } = await supabase
+        .from('drawing_elements')
+        .insert({ ...elementData, board_id: boardId, author_id: user.id })
+        .select()
+        .single()
+      if (error) throw error
+      setElements(prev => [...prev, data])
+      history.push({ type: 'add', element: data })
+      await broadcast('element:add', { element: data })
     } catch (err) {
       handleApiError(err, navigate, toast)
     }
-  }, [boardId, history, broadcast])
+  }, [boardId, history, broadcast, navigate, toast])
 
   const handleUndo = useCallback(async () => {
     const action = history.popUndo()
     if (!action) return
     if (action.type === 'add') {
       try {
-        await api.delete(`/api/boards/${boardId}/elements/${action.element.id}`)
+        const { error } = await supabase.from('drawing_elements').delete().eq('id', action.element.id)
+        if (error) throw error
         setElements(prev => prev.filter(e => e.id !== action.element.id))
         await broadcast('element:delete', { element_id: action.element.id, board_id: boardId })
-      } catch (err) {
-        handleApiError(err, navigate, toast)
-      }
+      } catch (err) { handleApiError(err, navigate, toast) }
     } else if (action.type === 'delete') {
       try {
-        const saved = await api.post(`/api/boards/${boardId}/elements`, action.element)
-        setElements(prev => [...prev, saved])
-        await broadcast('element:add', { element: saved })
-      } catch (err) {
-        handleApiError(err, navigate, toast)
-      }
+        const { data: { user } } = await supabase.auth.getUser()
+        const { data, error } = await supabase
+          .from('drawing_elements')
+          .insert({ ...action.element, board_id: boardId, author_id: user.id })
+          .select().single()
+        if (error) throw error
+        setElements(prev => [...prev, data])
+        await broadcast('element:add', { element: data })
+      } catch (err) { handleApiError(err, navigate, toast) }
     }
-  }, [boardId, history, broadcast])
+  }, [boardId, history, broadcast, navigate, toast])
 
   const handleRedo = useCallback(async () => {
     const action = history.popRedo()
     if (!action) return
     if (action.type === 'add') {
       try {
-        const saved = await api.post(`/api/boards/${boardId}/elements`, action.element)
-        setElements(prev => [...prev, saved])
-        await broadcast('element:add', { element: saved })
-      } catch (err) {
-        handleApiError(err, navigate, toast)
-      }
+        const { data: { user } } = await supabase.auth.getUser()
+        const { data, error } = await supabase
+          .from('drawing_elements')
+          .insert({ ...action.element, board_id: boardId, author_id: user.id })
+          .select().single()
+        if (error) throw error
+        setElements(prev => [...prev, data])
+        await broadcast('element:add', { element: data })
+      } catch (err) { handleApiError(err, navigate, toast) }
     } else if (action.type === 'delete') {
       try {
-        await api.delete(`/api/boards/${boardId}/elements/${action.element.id}`)
+        const { error } = await supabase.from('drawing_elements').delete().eq('id', action.element.id)
+        if (error) throw error
         setElements(prev => prev.filter(e => e.id !== action.element.id))
         await broadcast('element:delete', { element_id: action.element.id, board_id: boardId })
-      } catch (err) {
-        handleApiError(err, navigate, toast)
-      }
+      } catch (err) { handleApiError(err, navigate, toast) }
     }
-  }, [boardId, history, broadcast])
+  }, [boardId, history, broadcast, navigate, toast])
 
   const handleExport = useCallback(() => {
     const canvas = document.querySelector('canvas')
@@ -151,14 +156,13 @@ export default function BoardEditorPage() {
     })
     if (!hit) return
     try {
-      await api.delete(`/api/boards/${boardId}/elements/${hit.id}`)
+      const { error } = await supabase.from('drawing_elements').delete().eq('id', hit.id)
+      if (error) throw error
       setElements(prev => prev.filter(e => e.id !== hit.id))
       history.push({ type: 'delete', element: hit })
       await broadcast('element:delete', { element_id: hit.id, board_id: boardId })
-    } catch (err) {
-      handleApiError(err, navigate, toast)
-    }
-  }, [boardId, elements, history, broadcast])
+    } catch (err) { handleApiError(err, navigate, toast) }
+  }, [boardId, elements, history, broadcast, navigate, toast])
 
   useEffect(() => {
     function handleKey(e) {

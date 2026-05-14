@@ -172,14 +172,13 @@ function SharedBoardRedirect({ session }) {
     if (!session) return
     async function resolveToken() {
       try {
-        const BASE_URL = import.meta.env.VITE_API_BASE_URL || ''
-        const { data: { session: s } } = await supabase.auth.getSession()
-        const res = await fetch(`${BASE_URL}/api/boards/shared/${token}`, {
-          headers: { Authorization: `Bearer ${s.access_token}` }
-        })
-        const json = await res.json()
-        if (!res.ok) throw new Error(json?.error?.message || 'Not found')
-        navigate(`/boards/${json.data.id}`, { replace: true })
+        const { data, error } = await supabase
+          .from('boards')
+          .select('id')
+          .eq('share_token', token)
+          .single()
+        if (error) throw error
+        navigate(`/boards/${data.id}`, { replace: true })
       } catch (err) {
         setError(err.message)
       }
